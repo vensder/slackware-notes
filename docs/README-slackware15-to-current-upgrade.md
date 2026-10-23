@@ -207,8 +207,8 @@ settings only work with libinput. Fix:
 slackpkg remove xf86-input-synaptics
 ```
 
-Log out/in (or reboot). Touchpad settings (natural scrolling, tap-to-click)
-are back. `install-new` does not reinstall it; add `xf86-input-synaptics` to
+Touchpad settings (natural scrolling, tap-to-click) appeared in KDE settings
+right after removing the package - no logout or reboot needed. `install-new` does not reinstall it; add `xf86-input-synaptics` to
 the slackpkg blacklist only if it ever comes back.
 
 ### Third-party packages
