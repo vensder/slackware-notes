@@ -2,53 +2,87 @@
 #
 # Build (and optionally install) SlackBuilds fetched with download-slackbuilds.sh.
 #
-# Usage: build-slackbuild.sh [-c] [-d] [-f] [-i] [-n] [-V version] <package>
+# Usage: build-slackbuild.sh [-cdfinqv] [-V version] <package>
+#        build-slackbuild.sh -a [-cdfinqv]    (all installed packages tagged "alien")
 
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-SBDIR=${SBDIR:-$SCRIPT_DIR/slackbuilds}
+# Default: ~/slackbuilds of the real user, also when run via su/sudo
+# (where $HOME may point to /root). Override with SBDIR=...
+REAL_USER=${SUDO_USER:-$(logname 2>/dev/null)}
+REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
+SBDIR=${SBDIR:-${REAL_HOME:-$HOME}/slackbuilds}
 OUTPUT=${OUTPUT:-/tmp}
 export OUTPUT
 PKGDB=${PKGDB:-/var/lib/pkgtools/packages}
+# Build tag of the packages handled by -a
+PKGTAG=${PKGTAG:-alien}
 
 usage() {
     cat <<EOF
-Usage: $0 [-c] [-d] [-f] [-i] [-n] [-V version] <package>
+Usage: $0 [-cdfinqv] [-V version] <package>
+       $0 -a [-cdfinqv]
+  -a          all installed packages with build tag "$PKGTAG" (instead of <package>);
+              -a -c checks them all, -a -n -i upgrades them to newest upstream
   -c          check only: show versions (incl. upstream), do not build
   -d          also process dependencies from slack-required, recursively;
               missing or outdated dependencies are built and installed first
   -f          rebuild <package> even if this version is already installed
   -i          install/upgrade <package> after a successful build
   -n          build the newest upstream version instead of the SlackBuild default
+  -q          quiet: send SlackBuild output to a log file in $OUTPUT
+              (shows the last lines on failure)
+  -v          verbose: show URLs requested by the upstream version check
   -V version  build this exact version of <package>
 SlackBuilds dir: $SBDIR (override with SBDIR=...)
 EOF
     exit 1
 }
 
+ALL=0
 CHECK_ONLY=0
 DEPS=0
 FORCE=0
 INSTALL=0
 NEWEST=0
+QUIET=0
+VERBOSE=0
 USER_VER=
-while getopts "cdfinV:h" opt; do
+while getopts "acdfinqvV:h" opt; do
     case $opt in
+        a) ALL=1 ;;
         c) CHECK_ONLY=1 ;;
         d) DEPS=1 ;;
         f) FORCE=1 ;;
         i) INSTALL=1 ;;
         n) NEWEST=1 ;;
+        q) QUIET=1 ;;
+        v) VERBOSE=1 ;;
         V) USER_VER=$OPTARG ;;
         *) usage ;;
     esac
 done
 shift $((OPTIND - 1))
-[ $# -eq 1 ] || usage
+if [ $ALL -eq 1 ]; then
+    [ $# -eq 0 ] || usage
+    if [ -n "$USER_VER" ]; then
+        echo "ERROR: -V can't be used with -a"
+        exit 1
+    fi
+else
+    [ $# -eq 1 ] || usage
+fi
 
 if [ $CHECK_ONLY -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: building requires root, e.g.: su -c '$0 $*'"
     exit 1
 fi
+
+# Download a URL to stdout for the version check. Short timeout and one retry,
+# so an unresponsive site can't hang the run (wget default: 900s, 20 tries)
+fetch() {
+    [ $VERBOSE -eq 1 ] && echo "  fetching: $1" >&2
+    wget -qO- -T 15 -t 2 "$1"
+}
 
 # Escape a string for use in an extended regex (and as a sed pattern)
 re_escape() {
@@ -93,13 +127,13 @@ latest_upstream() {
     case $tpl in
         *://github.com/*|*://codeload.github.com/*)
             # Latest published release (no tags: old/odd tags give wrong results)
-            wget -qO- "https://api.github.com/repos/$(echo "$tpl" | cut -d/ -f4-5)/releases/latest" \
+            fetch "https://api.github.com/repos/$(echo "$tpl" | cut -d/ -f4-5)/releases/latest" \
                 | sed -nE 's/.*"tag_name": *"[^0-9"]*([0-9]+(\.[0-9]+)*)".*/\1/p'
             ;;
         *sourceforge.net/*)
             path=${tpl#*sourceforge.net/}
             path=${path#project/}
-            wget -qO- "https://sourceforge.net/projects/${path%%/*}/rss?path=/" \
+            fetch "https://sourceforge.net/projects/${path%%/*}/rss?path=/" \
                 | extract_versions "$pre" "$suf"
             ;;
         *)
@@ -107,20 +141,22 @@ latest_upstream() {
             case $path in *@VERSION@*) return 1 ;; esac
             # Need a file extension after the version, or the match is unreliable
             [ -n "$suf" ] || return 1
-            wget -qO- "$path/" | extract_versions "$pre" "$suf"
+            fetch "$path/" | extract_versions "$pre" "$suf"
             ;;
     esac | sort -uV | tail -n1
 }
 
 # Fallback: newest version known to repology.org (tracks most distros)
 repology_version() {
-    wget -qO- "https://repology.org/api/v1/project/$1" \
+    fetch "https://repology.org/api/v1/project/$1" \
         | grep -oE '\{[^{}]*\}' | grep -E '"status": *"newest"' \
         | sed -nE 's/.*"version": *"([^"]+)".*/\1/p' \
         | grep -E '^[0-9]+(\.[0-9]+)*$' | sort -uV | tail -n1
 }
 
 VISITED=" "
+UPDATES=()    # "name: installed -> upstream", for the -a summary
+NOSB=()       # installed packages without a downloaded SlackBuild
 
 # Process one package: show info, handle deps (with -d), then build.
 # $1 = package, $2 = parent package (empty for the top-level one)
@@ -145,6 +181,7 @@ process_pkg() {
         inst_ver=$(installed_version "$pkg")
         if [ -n "$inst_ver" ]; then
             echo "Installed version:  $inst_ver (no SlackBuild downloaded, skipping)"
+            NOSB+=("$pkg")
             return 0
         fi
         echo "ERROR: $sb_file not found. Download it first, e.g.:"
@@ -172,6 +209,9 @@ process_pkg() {
         fi
         if [ -n "$latest" ]; then
             echo "Upstream version:   $latest (from $from)"
+            if [ -n "$inst_ver" ] && ver_gt "$latest" "$inst_ver"; then
+                UPDATES+=("$prgnam: $inst_ver -> $latest")
+            fi
         else
             echo "Upstream version:   could not detect automatically"
         fi
@@ -212,11 +252,26 @@ process_pkg() {
 
     echo
     echo "== Building $prgnam $target in $build_dir ..."
-    ( cd "$build_dir" && VERSION=$target bash "./$pkg.SlackBuild" )
+    local log=$OUTPUT/build-$prgnam-$target.log
+    local stamp
+    stamp=$(mktemp)
+    if [ $QUIET -eq 1 ]; then
+        echo "Build log: $log (follow with: tail -f $log)"
+        ( cd "$build_dir" && VERSION=$target bash "./$pkg.SlackBuild" ) > "$log" 2>&1
+    else
+        ( cd "$build_dir" && VERSION=$target bash "./$pkg.SlackBuild" )
+    fi
 
-    pkgfile=$(ls -t "$OUTPUT/$prgnam-$target-"*.t?z 2>/dev/null | head -n1)
+    # Only accept a package created by this build, not one left from earlier
+    pkgfile=$(find "$OUTPUT" -maxdepth 1 -name "$prgnam-$target-*.t?z" -newer "$stamp" | head -n1)
+    rm -f "$stamp"
     if [ -z "$pkgfile" ]; then
-        echo "ERROR: build failed, no $prgnam-$target package in $OUTPUT"
+        if [ $QUIET -eq 1 ]; then
+            echo "---- last 30 lines of $log ----"
+            tail -n 30 "$log"
+            echo "----"
+        fi
+        echo "ERROR: build failed, no new $prgnam-$target package in $OUTPUT"
         return 1
     fi
     echo "Package created: $pkgfile"
@@ -229,4 +284,32 @@ process_pkg() {
     fi
 }
 
-process_pkg "$1" ""
+if [ $ALL -eq 0 ]; then
+    process_pkg "$1" ""
+    exit
+fi
+
+# -a: every installed package whose build field ends with the tag (e.g. 1alien).
+# Names are what is left after stripping the version, arch and build fields.
+FAILED=()
+for p in $(ls "$PKGDB" | grep -E -- "-[0-9]+$(re_escape "$PKGTAG")\$" | rev | cut -d- -f4- | rev); do
+    process_pkg "$p" "" || FAILED+=("$p")
+done
+
+echo
+echo "== Summary"
+if [ $NEWEST -eq 1 ] || [ $CHECK_ONLY -eq 1 ]; then
+    if [ ${#UPDATES[@]} -gt 0 ]; then
+        echo "Newer upstream versions:"
+        printf '  %s\n' "${UPDATES[@]}"
+    else
+        echo "No newer upstream versions found."
+    fi
+fi
+if [ ${#NOSB[@]} -gt 0 ]; then
+    echo "Skipped, no SlackBuild downloaded: ${NOSB[*]}"
+fi
+if [ ${#FAILED[@]} -gt 0 ]; then
+    echo "Failed: ${FAILED[*]}"
+    exit 1
+fi
