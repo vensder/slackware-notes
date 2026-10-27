@@ -161,11 +161,17 @@ Generic pattern: `GET_TARGET_PROPERTY(VAR target LOCATION)` becomes
 `fatal error: cairo.h: No such file or directory` while compiling lmms's bundled
 ZynAddSubFX: fltk 1.4 was built with Cairo, so its headers include `<cairo.h>`,
 which lives in `/usr/include/cairo/`, but the dependent build doesn't add that
-path. Either:
+path. Fix used for lmms: add the include path to `SLKCFLAGS` in the x86_64
+branch of the SlackBuild (it is passed as `CMAKE_C_FLAGS`/`CMAKE_CXX_FLAGS`):
 
-- add the flags to the dependent build: `$(pkg-config --cflags cairo)` in the
-  C++ flags its SlackBuild passes (find them with `grep -n SLKCFLAGS <name>.SlackBuild`), or
-- rebuild the library without that feature (fltk: `CAIRO=0`, see its README).
+```
+grep -n SLKCFLAGS lmms.SlackBuild
+# x86_64 line becomes:
+  SLKCFLAGS="-O2 -fPIC $(pkg-config --cflags cairo)"
+```
+
+Alternative: rebuild the library without that feature (fltk: `CAIRO=0`, see its
+README), so its headers don't include Cairo.
 
 General check for any "header not found": `pkg-config --cflags <lib>` shows
 the include path the build is missing.

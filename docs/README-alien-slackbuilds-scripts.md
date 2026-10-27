@@ -143,6 +143,11 @@ rerun without it to see the failing command.
 
 - `-d -n` can update a library to a version its dependents don't support yet.
   If a build breaks, use `-d` alone to stay with Alien's tested versions.
+  Example: `-d -n zynaddsubfx` installed mxml 4.x, which renamed its pkg-config
+  file to `mxml4` and changed its API; zynaddsubfx 3.0.6 then fails with
+  "required packages were not found: mxml". Fix: `removepkg mxml`, build mxml
+  without `-n`, then build zynaddsubfx with `-n` but without `-d`.
+  Note that a later `-a -n` would upgrade mxml again.
 - If the source download fails, see
   [Source download fails (outdated SRCURL)](#source-download-fails-outdated-srcurl).
 - Older SlackBuilds may ask about symlinks in `makepkg`; answer `y`.
@@ -202,6 +207,68 @@ Actual URL:      http://qmmp.ylsoftware.com/files/qmmp/2.4/qmmp-2.4.2.tar.bz2
 
 Other useful expansions: `${VERSION%%.*}` (major only: `2`),
 `${VERSION//./_}` (dots to underscores: `2_4_2`).
+
+### Applying an extra patch (build fails against a newer library)
+
+When a build fails because a dependency is newer than the program supports,
+other distros often already carry a fix. Look in Gentoo
+(`gentoo-portage/<category>/<package>/files/`), Arch, Debian or the project's
+GitHub pull requests.
+
+Example: zynaddsubfx 3.0.6 with mxml 4.x (`-d -n` built mxml 4.0.6) fails with
+"required packages were not found: mxml", because mxml 4 renamed its pkg-config
+file to `mxml4` and changed its API. Upstream fixed it in PR #315; Gentoo ships
+it as a patch for 3.0.6.
+
+1. Download the patch into the SlackBuild's `patches/` dir (it isn't on
+   Alien's server, so `download-slackbuilds.sh` leaves it alone):
+
+   ```
+   cd ~/slackbuilds/zynaddsubfx/build/patches
+   wget https://ftp.fau.de/gentoo-portage/media-sound/zynaddsubfx/files/zynaddsubfx-3.0.6-mxml4.patch
+   less zynaddsubfx-3.0.6-mxml4.patch
+   ```
+
+2. Dry run against unpacked source (left in `/tmp/build/tmp-<pkg>/` by a failed
+   build). Git-format patches (`a/...` `b/...` paths) use `-p1`:
+
+   ```
+   su -c 'cd /tmp/build/tmp-zynaddsubfx/zynaddsubfx-3.0.6 && patch -p1 --dry-run < /home/vensder/slackbuilds/zynaddsubfx/build/patches/zynaddsubfx-3.0.6-mxml4.patch'
+   ```
+
+   Only `checking file ...` lines (and `Hunk ... succeeded at ... (offset N lines)`)
+   are fine; `FAILED` means the patch doesn't fit this version.
+
+3. Add it to the SlackBuild next to the existing patches (after the `cd` into
+   the source dir). Alien's style, with `tee -a` so the log keeps all patches:
+
+   ```
+   grep -n patch zynaddsubfx.SlackBuild
+   ```
+
+   ```
+   cat $SRCDIR/patches/zynaddsubfx-3.0.6-mxml4.patch | patch -p1 --verbose \
+     2>&1 | tee -a $OUTPUT/patch-${PRGNAM}.log
+   ```
+
+   The pipe into `tee` hides a failing `patch`: the build continues unpatched.
+   If the build fails, check `/tmp/patch-zynaddsubfx.log` for `FAILED` first.
+
+4. Rebuild without `-d` (dependencies are installed, and `-d -n` might change
+   them again):
+
+   ```
+   su -c 'CMAKE_POLICY_VERSION_MINIMUM=3.5 ./build-slackbuild.sh -q -n -i zynaddsubfx'
+   ```
+
+Caveats:
+
+- The patch is for one version. If `-n` finds a newer release, it probably
+  already contains the fix: check with `-c`, then build with `-V 3.0.6` or
+  remove the patch line.
+- Re-downloading the SlackBuild overwrites the edited `.SlackBuild` when Alien
+  updates it (the patch file stays). Keep a copy of local edits, e.g. in this
+  repo, or note them here.
 
 ## Managing the installed packages
 
