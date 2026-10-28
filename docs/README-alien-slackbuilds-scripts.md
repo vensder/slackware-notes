@@ -40,6 +40,21 @@ Source archives (`*.tar.*`, `*.tgz`, `*.zip`, ...) are not downloaded at this
 stage; the SlackBuild downloads the version it builds from its `SRCURL`.
 Compressed patches (`*.diff.gz` etc.) are still downloaded.
 
+Exception: **git snapshot SlackBuilds** (version like `20241124_17000e7git`,
+no usable `SRCURL`). The snapshot tarball exists only in Alien's build dir;
+without it the SlackBuild falls back to its `src_checkout()` function, which
+may check out the wrong commit or fail (carla: `date: invalid date ...` then
+`cd: Carla-...: No such file or directory`). Download the tarball manually:
+
+```
+cd ~/slackbuilds/carla/build
+wget -U 'download-slackbuilds.sh (Slackware user)' \
+    http://www.slackware.com/~alien/slackbuilds/carla/build/carla-20241124_17000e7git.tar.gz
+```
+
+Delete any tarball/checkout left by a failed fallback first; the SlackBuild
+would reuse it.
+
 Speed notes:
 
 - Apache's column-sort links (`?C=N;O=D` etc.) are skipped with `--reject-regex`;

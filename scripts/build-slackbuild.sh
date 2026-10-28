@@ -101,12 +101,34 @@ installed_version() {
         | sed -E 's/.*-([^-]+)-[^-]+-[^-]+$/\1/' | head -n1
 }
 
+# Evaluate the top-level "VAR=..." lines of a SlackBuild one by one (so a
+# multi-line assignment can't break the rest), stopping after the line that
+# sets variable $2. Prints that variable's value. Runs in a subshell.
+# $3: initial value of VERSION (empty = unset)
+sb_eval_var() {
+    local file=$1 var=$2 init=$3
+    (
+        unset VERSION
+        [ -n "$init" ] && VERSION=$init
+        while IFS= read -r line; do
+            # skip lines that don't parse alone (would abort the subshell)
+            bash -n -c "$line" 2>/dev/null && eval "$line" 2>/dev/null
+        done < <(awk -v v="$var" '
+            $0 ~ "^" v "(\\[0\\])?=" { sub("^" v "\\[0\\]=", v "="); print; exit }
+            /^[A-Za-z_][A-Za-z0-9_]*=/ { print }' "$file")
+        printf '%s\n' "${!var}"
+    )
+}
+
+# Default VERSION of SlackBuild $1, with variables resolved, e.g.
+# VERSION=${VERSION:-${MINGW}_gcc${GCC}} -> v11.0.0_gcc13.1.0
+sb_version() {
+    sb_eval_var "$1" VERSION ""
+}
+
 # SRCURL from SlackBuild $1, with @VERSION@ in place of the version
 srcurl_template() {
-    local vars
-    vars=$(awk '/^SRCURL(\[0\])?=/ { sub(/^SRCURL\[0\]=/, "SRCURL="); print; exit }
-                /^[A-Za-z_][A-Za-z0-9_]*=/ { print }' "$1")
-    ( VERSION=@VERSION@; eval "$vars" 2>/dev/null; printf '%s\n' "${SRCURL:-}" )
+    sb_eval_var "$1" SRCURL @VERSION@
 }
 
 # Read text on stdin, print versions found as <prefix>VERSION<suffix>
@@ -191,7 +213,7 @@ process_pkg() {
 
     prgnam=$(sed -nE 's/^PRGNAM=//p' "$sb_file" | head -n1 | tr -d '"')
     prgnam=${prgnam:-$pkg}
-    sb_ver=$(sed -nE 's/^VERSION=\$\{VERSION:-(.*)\}.*/\1/p' "$sb_file" | head -n1 | tr -d '"')
+    sb_ver=$(sb_version "$sb_file")
     inst_ver=$(installed_version "$prgnam")
 
     echo "SlackBuild version: ${sb_ver:-unknown}"
@@ -255,11 +277,15 @@ process_pkg() {
     local log=$OUTPUT/build-$prgnam-$target.log
     local stamp
     stamp=$(mktemp)
+    # Pass VERSION only when it differs from the SlackBuild default: some
+    # SlackBuilds (e.g. git snapshots) behave differently when it is preset
+    local -a run_env=()
+    [ "$target" != "$sb_ver" ] && run_env=("VERSION=$target")
     if [ $QUIET -eq 1 ]; then
         echo "Build log: $log (follow with: tail -f $log)"
-        ( cd "$build_dir" && VERSION=$target bash "./$pkg.SlackBuild" ) > "$log" 2>&1
+        ( cd "$build_dir" && env "${run_env[@]}" bash "./$pkg.SlackBuild" ) > "$log" 2>&1
     else
-        ( cd "$build_dir" && VERSION=$target bash "./$pkg.SlackBuild" )
+        ( cd "$build_dir" && env "${run_env[@]}" bash "./$pkg.SlackBuild" )
     fi
 
     # Only accept a package created by this build, not one left from earlier

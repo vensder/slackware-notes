@@ -176,6 +176,89 @@ README), so its headers don't include Cairo.
 General check for any "header not found": `pkg-config --cflags <lib>` shows
 the include path the build is missing.
 
+### Function "was not declared" although the library declares it (Carla)
+
+```
+carla.cpp:136: error: 'carla_get_native_patchbay_plugin' was not declared in this scope
+```
+
+lmms 1.2.2's `plugins/carlabase/carla.h` picks Carla headers with
+`#if CARLA_VERSION_HEX >= 0x010911`, but nothing includes `CarlaDefines.h`
+(which defines that macro) before the check. An undefined macro is 0 in `#if`,
+so it takes the "old Carla" branch and never includes `CarlaNativePlugin.h`.
+Same error with Carla 2.6-alpha and 2.5.10, so the Carla version was not the cause.
+
+How it was found: compare what the library declares with what the program includes:
+
+```
+grep -rn -E 'native_(patchbay|rack)_plugin|define CARLA_VERSION_HEX' /usr/include/carla/
+grep -n -E 'include|carla_get_native|CARLA_' /tmp/SBo/lmms/plugins/carlabase/carla.h
+```
+
+Fix in `lmms.SlackBuild`, in the source dir (next to the CMake fixes):
+
+```
+# Carla: define CARLA_VERSION_HEX before carla.h checks it
+sed -i 's|^#include <QtCore/QMutex>|&\n#include "CarlaDefines.h"|' plugins/carlabase/carla.h
+```
+
+Without Carla, lmms can be built with `-DWANT_CARLA=OFF` in its `cmake` options.
+
+### Which Carla
+
+Alien's carla SlackBuild builds a 2.6.0-alpha git snapshot. Stable 2.5.10 was
+built instead (lmms 1.2.2 targets the stable API), from GitHub's tag archive,
+renamed to what the SlackBuild expects:
+
+```
+cd ~/slackbuilds/carla/build
+wget -O carla-2.5.10.tar.gz https://github.com/falkTX/Carla/archive/refs/tags/v2.5.10.tar.gz
+cd ~
+su -c './build-slackbuild.sh -q -f -i -V 2.5.10 carla'
+```
+
+`-f` is needed because the installed snapshot (`20241124_...`) sorts as newer
+than `2.5.10`. MinGW-w64 and wine in its `slack-required` are optional (Windows
+plugin bridge), so build without `-d`.
+
+## Case study: lmms 1.2.2 on -current, all changes
+
+Order: fltk 1.4.5, stk 5.0.1, (Alien) libgig, portaudio, carla 2.5.10, then lmms.
+
+| Package | Change |
+|---|---|
+| fltk | `VERSION=1.4.5` (GitHub release tarball); doc globs `CHANGES* CREDITS* README*`; remove `usr/man/cat*` |
+| stk | `VERSION=5.0.1` (ccrma release tarball, has `configure`); doc globs `INSTALL* README*` |
+| carla | stable 2.5.10 instead of the git snapshot; no MinGW-w64/wine |
+| lmms | `CMAKE_POLICY_VERSION_MINIMUM=3.5`; CMP0026/CMP0050/LOCATION sed; `$(pkg-config --cflags cairo)` in `SLKCFLAGS`; `CarlaDefines.h` include in `carla.h` |
+
+Build command used:
+
+```
+cd ~/sbo/lmms
+su -c 'NUMJOBS=-j$(nproc) CMAKE_POLICY_VERSION_MINIMUM=3.5 sh ./lmms.SlackBuild 2>&1 | tee build.log'
+```
+
+## Case study: MinGW-w64 (Alien) on -current - abandoned
+
+MinGW-w64 (a Windows cross-compiler, GCC 13.1 + binutils 2.40) is listed as a
+carla dependency, but only for the Windows plugin bridge (needs wine). Building
+2023 toolchain sources with -current's GCC 16 hit one incompatibility after
+another; useful as a reference for building old code with a new compiler:
+
+| Error | Cause | Fix |
+|---|---|---|
+| gmp: `could not find a working compiler, long long reliability test 1` | new GCC defaults to C23 | `export CFLAGS="$SLKCFLAGS -std=gnu17"` (C only) |
+| binutils: `gprofng/libcollector` errors | old gprofng vs new glibc/GCC | `--disable-gprofng` in binutils `configure` |
+| `Error: unknown pseudo-op: .base64` | GCC 15+ emits `.base64`; binutils < 2.43 can't assemble it | `BINUTILS=2.45` |
+| libcody: `S2C(const char8_t [2])` | new GCC defaults to C++20 (`char8_t`) | `export CXXFLAGS="$SLKCFLAGS -fno-char8_t"` |
+| libcody: `C++11 is required` | `-std=gnu++17` in `CXXFLAGS` overrides the `-std=c++11` configure adds | use `-fno-char8_t`, not `-std=...`, in `CXXFLAGS` |
+| `macro 'toupper' passed 2 arguments` in libstdc++ 16 headers | GCC 13's `safe-ctype.h` macros vs newer libstdc++ | stopped here (possible: `-include locale` in `CXXFLAGS`, or newer GCC) |
+
+Lessons: put `-std=` flags in `CFLAGS` or `CXXFLAGS` only, not in a shared
+`SLKCFLAGS` (it also lands in `CPPFLAGS`); check whether a "dependency" is
+actually needed before building a toolchain.
+
 ## Finding the first error
 
 The last lines of a failed build are usually just `make` giving up. Look for the
@@ -214,3 +297,6 @@ error is above the summary.
 | Package tag | `alien` (e.g. `1alien`) | `_SBo` (e.g. `1_SBo`) |
 | Output | `/tmp`, build in `/tmp/build` | `/tmp`, build in `/tmp/SBo` |
 | Helper scripts | `download-slackbuilds.sh`, `build-slackbuild.sh` | none yet (manual) |
+
+Alien and SBo packages can be mixed (lmms from SBo uses carla, libgig and
+portaudio from Alien); check dependency names, they can differ between the two.
