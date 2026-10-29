@@ -126,8 +126,25 @@ su -c './build-slackbuild.sh -i -V 0.9.2 vmpk'
 su -c './build-slackbuild.sh -a -n -i -q'
 ```
 
-`-a` without `-n` builds nothing: the SlackBuild default version is never newer
-than what was installed from it.
+`-a` without `-n` normally builds nothing: the SlackBuild default version is
+not newer than what was installed from it. Exception: a git-snapshot default
+(`20241124_17000e7git`) sorts higher than a release (`2.5.10`), so a package
+replaced by a release would be "upgraded" back to the snapshot. Put such
+packages on hold.
+
+### Hold list (`$SBDIR/.hold`)
+
+One package name per line, `#` comments allowed. Packages on hold are skipped
+by `-a` and by `-d` (as dependencies), and built only when named directly.
+
+```
+# ~/slackbuilds/.hold
+carla    # stable 2.5.10 installed; SlackBuild default is a git snapshot
+```
+
+Override the location with `HOLD_FILE=...`. When building from the
+slackbuilds-current repo (`SBDIR=.../alien`), the hold file is
+`alien/.hold` and is tracked in git.
 
 With `su -c` the script path is relative to the current directory; give the full
 path if needed, e.g. `su -c '~vensder/git/slackware-notes/scripts/build-slackbuild.sh -c vmpk'`.

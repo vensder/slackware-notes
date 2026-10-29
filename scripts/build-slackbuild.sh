@@ -16,6 +16,10 @@ export OUTPUT
 PKGDB=${PKGDB:-/var/lib/pkgtools/packages}
 # Build tag of the packages handled by -a
 PKGTAG=${PKGTAG:-alien}
+# Packages on hold (one name per line, # comments): skipped by -a and -d,
+# built only when named directly. E.g. carla kept at a stable release while
+# the SlackBuild default is a newer-sorting git snapshot.
+HOLD_FILE=${HOLD_FILE:-$SBDIR/.hold}
 
 usage() {
     cat <<EOF
@@ -34,6 +38,7 @@ Usage: $0 [-cdfinqv] [-V version] <package>
   -v          verbose: show URLs requested by the upstream version check
   -V version  build this exact version of <package>
 SlackBuilds dir: $SBDIR (override with SBDIR=...)
+Hold list:       $HOLD_FILE (skipped by -a/-d; override with HOLD_FILE=...)
 EOF
     exit 1
 }
@@ -106,11 +111,18 @@ installed_version() {
 # sets variable $2. Prints that variable's value. Runs in a subshell.
 # $3: initial value of VERSION (empty = unset)
 sb_eval_var() {
-    local file=$1 var=$2 init=$3
+    local file var=$2 init=$3
+    file=$(readlink -f "$1")
     (
+        # Run in the build dir like the SlackBuild itself (some derive
+        # VERSION from the tarball there, e.g. VERSION=$(ls *.tar.* ...))
+        cd "$(dirname "$file")" || exit
         unset VERSION
         [ -n "$init" ] && VERSION=$init
         while IFS= read -r line; do
+            # $0 is the SlackBuild when it runs, not this script
+            line=${line//\$\{0\}/$file}
+            line=${line//\$0/$file}
             # skip lines that don't parse alone (would abort the subshell)
             bash -n -c "$line" 2>/dev/null && eval "$line" 2>/dev/null
         done < <(awk -v v="$var" '
@@ -177,6 +189,12 @@ repology_version() {
 }
 
 VISITED=" "
+HELD=()       # packages skipped because they are on hold
+
+# Return 0 if package $1 is listed in the hold file
+on_hold() {
+    [ -f "$HOLD_FILE" ] && sed 's/#.*//' "$HOLD_FILE" | awk '{ print $1 }' | grep -qxF -- "$1"
+}
 UPDATES=()    # "name: installed -> upstream", for the -a summary
 NOSB=()       # installed packages without a downloaded SlackBuild
 
@@ -191,6 +209,13 @@ process_pkg() {
 
     case $VISITED in *" $pkg "*) return 0 ;; esac
     VISITED="$VISITED$pkg "
+
+    if { [ -n "$parent" ] || [ $ALL -eq 1 ]; } && on_hold "$pkg"; then
+        echo
+        echo "== $pkg: on hold ($HOLD_FILE), skipping (installed: $(installed_version "$pkg"))"
+        HELD+=("$pkg")
+        return 0
+    fi
 
     echo
     if [ -n "$parent" ]; then
@@ -334,6 +359,9 @@ if [ $NEWEST -eq 1 ] || [ $CHECK_ONLY -eq 1 ]; then
 fi
 if [ ${#NOSB[@]} -gt 0 ]; then
     echo "Skipped, no SlackBuild downloaded: ${NOSB[*]}"
+fi
+if [ ${#HELD[@]} -gt 0 ]; then
+    echo "Skipped, on hold: ${HELD[*]}"
 fi
 if [ ${#FAILED[@]} -gt 0 ]; then
     echo "Failed: ${FAILED[*]}"
