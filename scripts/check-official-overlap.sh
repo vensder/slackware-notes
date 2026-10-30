@@ -59,9 +59,9 @@ echo "$found match(es) in official package list ($PKGLIST)"
 # Kernel packages: several versions may be installed, compare the newest one
 echo
 echo "Running kernel: $(uname -r)"
-printf '%-24s %-20s %-20s %s\n' NAME INSTALLED OFFICIAL RESULT
-awk '$2 ~ /^kernel-/ && $2 != "kernel-firmware" { print $2, $3 }' "$PKGLIST" |
-while read -r name over; do
+printf '%-24s %-20s %-20s %-14s %s\n' NAME INSTALLED OFFICIAL SERIES RESULT
+awk '$2 ~ /^kernel-/ && $2 != "kernel-firmware" { print $2, $3, $1 }' "$PKGLIST" |
+while read -r name over series; do
     ver=$(for f in "$PKGDB/$name"-*; do
               [ -f "$f" ] || continue
               rest=${f##*/}
@@ -76,5 +76,5 @@ while read -r name over; do
     else
         result="NEW KERNEL AVAILABLE"
     fi
-    printf '%-24s %-20s %-20s %s\n' "$name" "$ver" "$over" "$result"
+    printf '%-24s %-20s %-20s %-14s %s\n' "$name" "$ver" "$over" "$series" "$result"
 done
