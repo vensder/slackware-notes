@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# List installed third-party packages (build tag ending in "alien" or "_SBo")
+# List installed third-party packages (build tag ending in "alien", "vensder" or "_SBo")
 # that also exist in the official Slackware package list, and compare versions.
 # Also checks whether the official list has a newer kernel than the newest
 # installed one (kernel-* is usually blacklisted and installed side by side).
@@ -12,7 +12,7 @@
 PKGDB=${PKGDB:-/var/lib/pkgtools/packages}
 PKGLIST=${PKGLIST:-/var/lib/slackpkg/pkglist}
 # Extended regex matched against the build field of installed packages
-TAGRE=${TAGRE:-'(alien|_SBo)$'}
+TAGRE=${TAGRE:-'(alien|vensder|_SBo)$'}
 
 if [ ! -r "$PKGLIST" ]; then
     echo "Cannot read $PKGLIST (run: su -c 'slackpkg update')" >&2
