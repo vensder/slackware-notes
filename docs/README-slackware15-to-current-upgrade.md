@@ -201,15 +201,49 @@ Later, in Fedora: rename the GRUB entry in `/etc/grub.d/40_custom`
 ### Touchpad missing in KDE settings ("no touchpad found")
 
 Cause: the old synaptics X driver grabs the touchpad, but Plasma's touchpad
-settings only work with libinput. Fix:
+settings only work with libinput. Under X11, `70-synaptics.conf` from
+xf86-input-synaptics outranks the libinput config, so X picks synaptics.
+Symptoms in the X11 session: the Touchpad page is missing (found only via
+search), shows "no touchpad found", Apply stays greyed out, and
+`systemsettings` run from a terminal prints
+`kcm_touchpad/main.qml: Unable to assign [undefined] to bool`. Fix:
 
 ```sh
-slackpkg remove xf86-input-synaptics
+su -c 'slackpkg remove xf86-input-synaptics'
+su -c 'echo xf86-input-synaptics >> /etc/slackpkg/blacklist'
 ```
 
-Touchpad settings (natural scrolling, tap-to-click) appeared in KDE settings
-right after removing the package - no logout or reboot needed. `install-new` does not reinstall it; add `xf86-input-synaptics` to
-the slackpkg blacklist only if it ever comes back.
+`install-new` does not reinstall it; the blacklist line guards against
+installing it back by hand (e.g. to get tap-to-click back in X11).
+
+In a Wayland session the settings appear right after removing the package.
+In an X11 session, log out so X restarts (or reboot).
+
+Wayland and X11 keep separate touchpad settings (`~/.config/kcminputrc` vs
+`~/.config/touchpadxlibinputrc`), so after switching to X11, tap-to-click and
+natural scrolling look reset and must be set once in System Settings.
+Optional X11 defaults, used before Plasma applies its own settings:
+
+```sh
+su -c 'cat > /etc/X11/xorg.conf.d/40-libinput-touchpad.conf << "EOF"
+Section "InputClass"
+    Identifier "libinput touchpad defaults"
+    MatchIsTouchpad "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+    Option "Tapping" "on"
+    Option "NaturalScrolling" "true"
+EndSection
+EOF'
+```
+
+Check in X11 (both values should be 1):
+
+```sh
+grep -i touchpad /var/log/Xorg.0.log | grep -i libinput
+xinput list-props "$(xinput list --name-only | grep -i touchpad | head -1)" \
+  | grep -E 'Tapping Enabled|Natural Scrolling Enabled'
+```
 
 ### Third-party packages
 
